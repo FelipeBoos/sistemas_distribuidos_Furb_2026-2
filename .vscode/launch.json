@@ -1,0 +1,60 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "SocketChat — listen (alice, porta 9000)",
+      "type": "coreclr",
+      "request": "launch",
+      "preLaunchTask": "build-socketchat",
+      "program": "${workspaceFolder}/SocketChat/bin/Debug/net9.0/SocketChat.dll",
+      "args": ["listen", "9000", "alice"],
+      "cwd": "${workspaceFolder}/SocketChat",
+      "console": "integratedTerminal",
+      "stopAtEntry": false
+    },
+    {
+      "name": "SocketChat — connect (bob → 127.0.0.1:9000)",
+      "type": "coreclr",
+      "request": "launch",
+      "preLaunchTask": "build-socketchat",
+      "program": "${workspaceFolder}/SocketChat/bin/Debug/net9.0/SocketChat.dll",
+      "args": ["connect", "127.0.0.1", "9000", "bob"],
+      "cwd": "${workspaceFolder}/SocketChat",
+      "console": "integratedTerminal",
+      "stopAtEntry": false
+    },
+    {
+      "name": "TP01-ChatDistribuido — alice (porta 9001)",
+      "type": "coreclr",
+      "request": "launch",
+      "preLaunchTask": "build-chatdistribuido",
+      "program": "${workspaceFolder}/TP01-ChatDistribuido/bin/Debug/net9.0/ChatDistribuido.dll",
+      "args": ["--port", "9001", "--name", "alice", "--peers", "127.0.0.1:9002,127.0.0.1:9003"],
+      "cwd": "${workspaceFolder}/TP01-ChatDistribuido",
+      "console": "integratedTerminal",
+      "stopAtEntry": false
+    },
+    {
+      "name": "TP01-ChatDistribuido — bob (porta 9002)",
+      "type": "coreclr",
+      "request": "launch",
+      "preLaunchTask": "build-chatdistribuido",
+      "program": "${workspaceFolder}/TP01-ChatDistribuido/bin/Debug/net9.0/ChatDistribuido.dll",
+      "args": ["--port", "9002", "--name", "bob", "--peers", "127.0.0.1:9001,127.0.0.1:9003"],
+      "cwd": "${workspaceFolder}/TP01-ChatDistribuido",
+      "console": "integratedTerminal",
+      "stopAtEntry": false
+    },
+    {
+      "name": "TP01-ChatDistribuido — carol (porta 9003)",
+      "type": "coreclr",
+      "request": "launch",
+      "preLaunchTask": "build-chatdistribuido",
+      "program": "${workspaceFolder}/TP01-ChatDistribuido/bin/Debug/net9.0/ChatDistribuido.dll",
+      "args": ["--port", "9003", "--name", "carol", "--peers", "127.0.0.1:9001,127.0.0.1:9002"],
+      "cwd": "${workspaceFolder}/TP01-ChatDistribuido",
+      "console": "integratedTerminal",
+      "stopAtEntry": false
+    }
+  ]
+}

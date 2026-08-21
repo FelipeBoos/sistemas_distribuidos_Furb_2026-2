@@ -1,0 +1,5 @@
+<Solution>
+  <Project Path="SocketChat/SocketChat.csproj" />
+  <Project Path="TP01-ChatDistribuido/TP01-ChatDistribuido.csproj" />
+  <Project Path="TP01-ChatDistribuido.Tests/ChatDistribuido.Tests.csproj" />
+</Solution>
