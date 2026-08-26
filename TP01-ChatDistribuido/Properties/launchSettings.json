@@ -1,0 +1,12 @@
+{
+  "profiles": {
+    "Servidor (9001)": {
+      "commandName": "Project",
+      "commandLineArgs": "--port 9001 --name servidor"
+    },
+    "Alice (9002)": {
+      "commandName": "Project",
+      "commandLineArgs": "--port 9002 --name alice --peers 127.0.0.1:9001"
+    }
+  }
+}

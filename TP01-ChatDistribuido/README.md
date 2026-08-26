@@ -46,6 +46,18 @@ Cada peer conecta-se aos demais listados em `--peers` e também aceita conexões
 outros — a lista de pares configurada é estática, não há descoberta dinâmica: cada
 instância só conhece, no start, os endereços informados na sua própria configuração.
 
+### Subindo as 3 instâncias de uma vez (Windows/cmd)
+
+Em vez de abrir cada terminal manualmente, rode este comando a partir da raiz do
+repositório — ele abre uma janela `cmd` por participante, já com os `--peers`
+preenchidos:
+
+```
+start "alice" cmd /k dotnet run --project TP01-ChatDistribuido -- --port 9001 --name alice --peers 127.0.0.1:9002,127.0.0.1:9003
+start "bob"   cmd /k dotnet run --project TP01-ChatDistribuido -- --port 9002 --name bob   --peers 127.0.0.1:9001,127.0.0.1:9003
+start "carol" cmd /k dotnet run --project TP01-ChatDistribuido -- --port 9003 --name carol --peers 127.0.0.1:9001,127.0.0.1:9002
+```
+
 ### Comandos
 
 | Comando | Efeito |
@@ -192,6 +204,34 @@ rede possui prazo definido".
 - Sem persistência de histórico de mensagens.
 - `/list` reflete apenas os peers com conexão direta ativa neste nó (por design,
   não é um bug — ver "Anúncio de saída" acima).
+- `PeerJoined` (`MeshNode.cs:201,216-218`) é um aviso informativo retransmitido por
+  um peer sobre a entrada de um terceiro na malha ("[X entrou na conversa]") — não
+  afeta a entrega de mensagens de chat ou privadas (sempre diretas), mas é
+  tecnicamente uma exceção ao princípio de "toda comunicação é direta entre dois
+  pares" da arquitetura exigida. Vale confirmar com o professor se isso é aceitável.
+
+## Conformidade com o enunciado (auditoria)
+
+Checklist verificado lendo o código-fonte (não apenas a documentação abaixo):
+
+| # | Requisito | Status |
+|---|---|---|
+| — | Restrição tecnológica (apenas `Socket` sobre TCP, sem SignalR/gRPC/WebSocket/MQTT/libs de P2P/fila/BD) | ✅ |
+| — | Nenhum nó eleito servidor/coordenador/repositório da lista de participantes | ✅ (ver ressalva do `PeerJoined` acima) |
+| 1 | Porta, apelido e lista de pares via argumento ou arquivo de config | ✅ |
+| 2 | Conecta aos pares conhecidos e aceita conexões dos demais, formando malha completa | ✅ |
+| 3 | Mensagem digitada é entregue a todos os demais | ✅ |
+| 4 | Cada mensagem exibida identifica o autor | ✅ |
+| 5 | Mensagens delimitadas corretamente (sem truncar/grudar) | ✅ |
+| 6 | Toda operação de rede tem prazo definido | ✅ |
+| 7 | Queda de um par não derruba nem trava os demais | ✅ |
+| 8 | Par que encerra (limpo ou abrupto) é removido e a saída é anunciada | ✅ |
+| 9 | Peer lento não trava a conversa dos outros, política documentada e justificada | ✅ |
+| 10 | `/list` e `/quit` | ✅ |
+| 11 | `/msg` privado entregue direto ao destinatário | ✅ |
+
+Todos os 11 requisitos numerados, a arquitetura exigida e a restrição de tecnologia
+foram confirmados no código, não apenas descritos aqui.
 
 ## Testes automatizados
 
@@ -220,6 +260,27 @@ Não há testes automatizados de ponta a ponta da malha (múltiplos processos,
 handshake, backpressure, detecção de queda) — esses cenários foram validados
 manualmente conforme o roteiro abaixo, já que dependem de tempo real de rede e
 múltiplos processos, difíceis de tornar determinísticos em um teste unitário.
+
+### Lacunas de cobertura conhecidas
+
+19 testes, todos passando (`dotnet test`, ~3,2s). Portas sempre dinâmicas
+(`Bind(..., 0)`), sem `Sleep`/`Delay` fixo — baixo risco de flakiness. A cobertura,
+porém, se concentra na camada "pura" (framing, serialização do protocolo, parsing
+de config, regra de desempate de conexão duplicada) e **não chega a `MeshNode.cs`
+nem a `PeerConnection.cs`** — a orquestração real (handshake, accept/dial loop,
+timeouts, backpressure, remoção de peer, broadcast/roteamento de privada) roda sem
+nenhum teste automatizado, dependendo do roteiro de teste manual abaixo. Gaps
+concretos, testáveis do mesmo jeito que `FramesTests.cs` já testa sockets reais:
+
+1. **Timeouts nunca são exercitados por teste** — `ConnectTimeout` (`Connection.cs`),
+   `HandshakeTimeout`, `SendTimeout` e `IdleReadTimeout` (`PeerConnection.cs`) são
+   constantes fixas sem nenhum teste que force o caminho de timeout.
+2. **Backpressure/consumidor lento não é testada** — o canal limitado com
+   `DropOldest` e a desconexão após falhas de envio consecutivas
+   (`PeerConnection.cs`) não têm teste simulando um peer que para de ler.
+3. **Sem teste de dado malformado vindo de um peer** — frame com `size` inválido do
+   lado do leitor (`Frames.cs:29-30`) ou JSON de `WireMessage` corrompido não são
+   exercitados.
 
 ## Roteiro de teste manual
 
