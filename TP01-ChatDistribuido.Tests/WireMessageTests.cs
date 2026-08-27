@@ -51,5 +51,23 @@ namespace ChatDistribuido.Tests
             Assert.Equal(MessageType.Bye, decoded.Type);
             Assert.Equal("alice", decoded.From);
         }
+
+        [Fact]
+        public void PeerList_RoundTripsPeerArray()
+        {
+            var peers = new List<PeerInfo>
+            {
+                new("bob", "192.168.2.5", 9002),
+                new("carol", "192.168.3.7", 5000)
+            };
+            var original = WireMessage.PeerList("alice", peers);
+
+            var decoded = WireMessage.FromFrame(original.ToFrame());
+
+            Assert.Equal(MessageType.PeerList, decoded.Type);
+            Assert.Equal("alice", decoded.From);
+            Assert.NotNull(decoded.Peers);
+            Assert.Equal(peers, decoded.Peers);
+        }
     }
 }

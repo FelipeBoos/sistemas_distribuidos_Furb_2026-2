@@ -58,13 +58,98 @@ start "bob"   cmd /k dotnet run --project TP01-ChatDistribuido -- --port 9002 --
 start "carol" cmd /k dotnet run --project TP01-ChatDistribuido -- --port 9003 --name carol --peers 127.0.0.1:9001,127.0.0.1:9002
 ```
 
+## Descoberta automática de peers
+
+Além da lista estática de `--peers`, três mecanismos reduzem a necessidade de listar
+cada endereço manualmente:
+
+### Varredura de sub-rede (`192.168.2.*`)
+
+Uma entrada de `--peers` terminada em `.*` (ex.: `--peers 192.168.2.*:9001`) faz o
+nó tentar conectar via TCP em todos os 254 hosts daquela faixa `/24` na porta
+indicada, em vez de precisar listar cada IP. É **varredura de conexão TCP real**
+(`Socket.ConnectAsync` em cada candidato, com timeout curto e concorrência
+limitada), não broadcast/UDP — mantém a restrição de tecnologia do enunciado
+("apenas a classe `Socket` sobre TCP").
+
+Se **nenhum** `--peers` for informado, o nó varre sozinho a sub-rede derivada do
+próprio `--host` (os 3 primeiros octetos), na sua própria porta — equivalente a
+`--peers <minha-sub-rede>.*:<minha-porta>` implícito. A sub-rede vem do `--host`
+que você configurou, não de uma detecção da interface de rede real do SO — por
+isso funciona igual tanto numa LAN de verdade (`--host 192.168.2.10`) quanto num
+teste local usando aliases de loopback (`--host 127.0.1.11`, já que todo o bloco
+`127.0.0.0/8` é loopback válido no Windows).
+
+### Ponte entre duas malhas (`PeerList` / gossip)
+
+Ao registrar qualquer conexão nova, um nó envia ao peer recém-conectado a lista de
+todos os outros peers que já conhece (mensagem `PeerList`). Isso permite que, ao
+entrar numa malha através de um único peer conhecido, o nó novo descubra
+transitivamente todo mundo que aquele peer já enxerga — inclusive uma **segunda
+malha inteira**, se o peer de entrada também estiver conectado a ela.
+
+**Regra fixa da porta 5000 entre redes diferentes**: ao discar para um IP fora da
+minha sub-rede `/24` (comparando com `--host`), a porta configurada é **ignorada**
+e a conexão é sempre tentada na porta fixa `5000` — essa é a "porta de entrada" de
+uma rede desconhecida. Ou seja, para entrar em outra rede basta informar o IP
+(`--peers 192.168.3.10`, sem porta) — quem estiver ouvindo em `5000` do outro lado
+responde. Uma vez dentro, os peers aprendidos via `PeerList` são discados na porta
+real que eles reportam (sem essa sobrescrita), porque essa informação já veio de
+um peer confiável de dentro daquela malha.
+
+⚠️ **Nota de conformidade com o PDF**: tanto a varredura de sub-rede quanto a troca
+de `PeerList` vão além do texto literal do requisito 1 (que descreve receber "a
+lista de pares conhecidos" como entrada estática). Nenhuma das duas viola a
+proibição de "nó coordenador/repositório da lista de participantes": a varredura é
+só TCP connect direto sem intermediário, e a troca de `PeerList` é simétrica — cada
+nó compartilha sua própria visão local, ninguém vira fonte única de verdade.
+
+### Scripts de demonstração (Windows)
+
+Como o Windows trata todo o bloco `127.0.0.0/8` como loopback, dá pra simular
+"redes" diferentes numa única máquina usando `127.0.1.*`, `127.0.2.*` etc., sem
+nenhuma configuração extra. Cada teste do roteiro tem seu próprio script `.bat` (na
+raiz deste projeto) que abre as janelas de `cmd` necessárias — dá duplo-clique ou
+roda pelo terminal, e acompanha tudo acontecendo ao vivo em cada janela:
+
+| Script | Teste que demonstra |
+|---|---|
+| `testar-malha-basica.bat` | Passos 1-6 do "Roteiro de teste manual" abaixo: malha completa, broadcast, `/msg`, framing sob rajada, `/quit`, queda abrupta |
+| `testar-descoberta-automatica.bat` | 3 nós sem **nenhum** `--peers` — cada um varre sozinho a sub-rede do seu próprio `--host` |
+| `testar-varredura-subrede.bat` | 3 nós entram só sabendo a faixa `127.0.1.*:9001`, sem listar IP nenhum |
+| `testar-ponte-redes.bat` | Uma "rede B" entra só pelo IP de um peer da "rede A" (sem porta) e descobre o resto transitivamente |
+| `testar-msg-duplicado.bat` | Dois peers com o mesmo apelido conectados a um terceiro nó, testando a desambiguação do `/msg` |
+
+Cada script explica no próprio console o que checar (`/list`, `/msg`, etc.) em cada
+janela aberta — são as mesmas máquinas de estado testadas em
+`TP01-ChatDistribuido.Tests`, só que rodando de verdade em processos separados para
+você observar visualmente, em vez de só `Assert`.
+
+### Perfis de execução (Visual Studio)
+
+`Properties/launchSettings.json` já tem um perfil por instância de cada cenário
+acima, prontos no dropdown de execução do Visual Studio (ao lado do botão ▶️):
+
+| Cenário | Perfis |
+|---|---|
+| Mesh básica | `Servidor (9001)`, `Alice (9002)` |
+| Descoberta automática (sem `--peers`) | `Descoberta automatica - no1/no2/no3` |
+| Varredura de sub-rede | `Varredura - no1/no2/no3 (127.0.1.11/12/13)` |
+| Ponte entre redes | `Ponte - servidorA/nodeA2/nodeA3 (rede A)`, `Ponte - nodeB (rede B)` |
+| `/msg` com apelido duplicado | `Msg duplicado - servidor/bob1/bob2` |
+
+Para rodar vários ao mesmo tempo: escolha um perfil no dropdown e dê **Start
+without debugging** (`Ctrl+F5`) — isso abre a instância num console próprio sem
+travar o VS — repita trocando o perfil no dropdown para cada instância do
+cenário.
+
 ### Comandos
 
 | Comando | Efeito |
 |---|---|
 | `texto livre` | Envia mensagem em broadcast a todos os peers conectados |
 | `/list` | Lista os participantes atualmente conectados a **este** nó |
-| `/msg apelido texto` | Envia mensagem privada, direto, apenas ao destinatário |
+| `/msg apelido texto` | Envia mensagem privada, direto, apenas ao destinatário — se houver mais de um peer com esse apelido, mostra uma lista numerada e pede o número da opção antes de enviar |
 | `/quit` | Anuncia a saída (`Bye`) a todos os peers e encerra |
 
 `/list` mostra sempre uma visão **local**: os peers com quem este nó tem conexão
@@ -82,7 +167,9 @@ global sincronizada em nenhum lugar.
 | `PeerId.cs` | Identidade de um peer: apelido + host:porta de escuta |
 | `PeerConfig.cs` | Parsing de argumentos de linha de comando e de arquivo de configuração JSON |
 | `PeerConnection.cs` | Uma conexão TCP ativa: fila de envio, receive loop, send loop, heartbeat, isolados por peer |
-| `MeshNode.cs` | Accept loop, dial-out por peer conhecido, dicionário de peers conectados, desempate, broadcast, roteamento |
+| `MeshNode.cs` | Accept loop, dial-out por peer conhecido, varredura de sub-rede, gossip de `PeerList`, dicionário de peers conectados, desempate, broadcast, roteamento |
+| `ConnectionTieBreak.cs` | Regra de desempate de conexão duplicada e `NetworkRules` (mesma/diferente sub-rede, porta de rede externa, prefixo de sub-rede a partir do `--host`) |
+| `PeerLookup.cs` | Busca pura de peers por apelido, usada na desambiguação do `/msg` |
 | `ConsoleUi.cs` | Loop de leitura de stdin e interpretação de comandos |
 | `ConsoleLog.cs` | `Console.WriteLine` com lock, para não intercalar linhas entre a UI e as receive loops concorrentes |
 | `Program.cs` | Ponto de entrada: parse de configuração e ciclo de vida do nó |
@@ -92,9 +179,11 @@ global sincronizada em nenhum lugar.
 Cada frame entregue pelo framing existente carrega um JSON UTF-8:
 
 ```csharp
-enum MessageType { Hello, Chat, Private, PeerJoined, Bye, Ping }
+enum MessageType { Hello, Chat, Private, PeerJoined, Bye, Ping, PeerList }
+record PeerInfo(string Nickname, string Host, int Port);
 record WireMessage(MessageType Type, string From, string? To, string? Text,
-                    string? ListenHost, int? ListenPort, DateTimeOffset Timestamp);
+                    string? ListenHost, int? ListenPort, DateTimeOffset Timestamp,
+                    IReadOnlyList<PeerInfo>? Peers = null);
 ```
 
 - **Hello** — primeira mensagem trocada nos dois sentidos em **toda** conexão nova
@@ -110,6 +199,9 @@ record WireMessage(MessageType Type, string From, string? To, string? Text,
   não faz busca via terceiros, o que violaria "sem repositório privilegiado").
 - **PeerJoined** — aviso informativo enviado aos demais peers quando um novo peer
   completa o handshake, só para efeito de log ("X entrou na conversa").
+- **PeerList** — enviada ao peer recém-conectado com a lista de todos os outros
+  peers já conhecidos (apelido + host + porta), para descoberta transitiva (ver
+  "Descoberta automática de peers" acima).
 - **Bye** — enviado a todas as conexões ativas quando o usuário digita `/quit`, antes
   de fechar os sockets.
 - **Ping** — heartbeat periódico (ver timeouts).
@@ -242,8 +334,10 @@ depender de múltiplos processos reais:
 |---|---|
 | `FramesTests.cs` | Round-trip de payload sobre um par de sockets TCP real em loopback; rajada de mensagens curtas chegando sem grude; mensagem longa sem truncar; payload acima do limite lança `ArgumentException`; leitura após close limpo retorna `null` |
 | `WireMessageTests.cs` | Serialização/desserialização (round-trip) de cada tipo de mensagem do protocolo |
-| `PeerConfigTests.cs` | Parsing de argumentos de linha de comando e de arquivo de configuração JSON, incluindo casos de erro (porta/nome ausente, par mal formatado) |
+| `PeerConfigTests.cs` | Parsing de argumentos de linha de comando e de arquivo de configuração JSON, incluindo casos de erro (porta/nome ausente, par mal formatado, faixa de sub-rede inválida) |
 | `ConnectionTieBreakTests.cs` | Regra de desempate de conexão duplicada — inclusive que os dois lados de um par sempre chegam à mesma decisão sobre qual conexão sobrevive |
+| `NetworkRulesTests.cs` | Comparação de sub-rede e a regra fixa da porta 5000 entre redes diferentes |
+| `PeerLookupTests.cs` | Busca de peers por apelido — 0, 1 e múltiplos matches (base da desambiguação do `/msg`) |
 | `PeerIdTests.cs` | Formato do `EndpointKey` |
 
 A lógica de desempate foi extraída para `ConnectionTieBreak.cs` (usada por

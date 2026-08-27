@@ -7,6 +7,58 @@
     "Alice (9002)": {
       "commandName": "Project",
       "commandLineArgs": "--port 9002 --name alice --peers 127.0.0.1:9001"
+    },
+    "Descoberta automatica - no1 (127.0.1.11, sem --peers)": {
+      "commandName": "Project",
+      "commandLineArgs": "--port 9001 --name no1 --host 127.0.1.11"
+    },
+    "Descoberta automatica - no2 (127.0.1.12, sem --peers)": {
+      "commandName": "Project",
+      "commandLineArgs": "--port 9001 --name no2 --host 127.0.1.12"
+    },
+    "Descoberta automatica - no3 (127.0.1.13, sem --peers)": {
+      "commandName": "Project",
+      "commandLineArgs": "--port 9001 --name no3 --host 127.0.1.13"
+    },
+    "Varredura - no1 (127.0.1.11)": {
+      "commandName": "Project",
+      "commandLineArgs": "--port 9001 --name no1 --host 127.0.1.11 --peers 127.0.1.*:9001"
+    },
+    "Varredura - no2 (127.0.1.12)": {
+      "commandName": "Project",
+      "commandLineArgs": "--port 9001 --name no2 --host 127.0.1.12 --peers 127.0.1.*:9001"
+    },
+    "Varredura - no3 (127.0.1.13)": {
+      "commandName": "Project",
+      "commandLineArgs": "--port 9001 --name no3 --host 127.0.1.13 --peers 127.0.1.*:9001"
+    },
+    "Ponte - servidorA (rede A, 127.0.1.11:5000)": {
+      "commandName": "Project",
+      "commandLineArgs": "--port 5000 --name servidorA --host 127.0.1.11"
+    },
+    "Ponte - nodeA2 (rede A, 127.0.1.12:9002)": {
+      "commandName": "Project",
+      "commandLineArgs": "--port 9002 --name nodeA2 --host 127.0.1.12 --peers 127.0.1.11:5000"
+    },
+    "Ponte - nodeA3 (rede A, 127.0.1.13:9003)": {
+      "commandName": "Project",
+      "commandLineArgs": "--port 9003 --name nodeA3 --host 127.0.1.13 --peers 127.0.1.11:5000"
+    },
+    "Ponte - nodeB (rede B, 127.0.2.20)": {
+      "commandName": "Project",
+      "commandLineArgs": "--port 9010 --name nodeB --host 127.0.2.20 --peers 127.0.1.11"
+    },
+    "Msg duplicado - servidor (9001)": {
+      "commandName": "Project",
+      "commandLineArgs": "--port 9001 --name servidor"
+    },
+    "Msg duplicado - bob1 (9002)": {
+      "commandName": "Project",
+      "commandLineArgs": "--port 9002 --name bob --peers 127.0.0.1:9001"
+    },
+    "Msg duplicado - bob2 (9003)": {
+      "commandName": "Project",
+      "commandLineArgs": "--port 9003 --name bob --peers 127.0.0.1:9001"
     }
   }
 }

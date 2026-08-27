@@ -43,8 +43,41 @@ namespace ChatDistribuido.Tests
         public void InvalidPeerFormat_Throws()
         {
             Assert.Throws<ArgumentException>(() => PeerConfig.Parse([
-                "--port", "9001", "--name", "alice", "--peers", "sem-porta"
+                "--port", "9001", "--name", "alice", "--peers", "host:nao-e-numero"
             ]));
+        }
+
+        [Fact]
+        public void ParsesArgs_WithSubnetWildcardPeer()
+        {
+            var config = PeerConfig.Parse([
+                "--port", "9001", "--name", "alice", "--peers", "192.168.2.*:9001"
+            ]);
+
+            Assert.Single(config.KnownPeers);
+            Assert.Equal(("192.168.2.*", 9001), config.KnownPeers[0]);
+        }
+
+        [Theory]
+        [InlineData("192.168.*:9001")]
+        [InlineData("256.1.1.*:9001")]
+        [InlineData("abc.168.2.*:9001")]
+        public void SubnetWildcard_RejectsInvalidFormat(string peerEntry)
+        {
+            Assert.Throws<ArgumentException>(() => PeerConfig.Parse([
+                "--port", "9001", "--name", "alice", "--peers", peerEntry
+            ]));
+        }
+
+        [Fact]
+        public void ParsesArgs_WithHostOnlyPeer_NoPort()
+        {
+            var config = PeerConfig.Parse([
+                "--port", "9001", "--name", "alice", "--peers", "192.168.3.10"
+            ]);
+
+            Assert.Single(config.KnownPeers);
+            Assert.Equal("192.168.3.10", config.KnownPeers[0].Host);
         }
 
         [Fact]

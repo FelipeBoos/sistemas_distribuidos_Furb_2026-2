@@ -3,7 +3,9 @@ using System.Text.Json.Serialization;
 
 namespace ChatDistribuido
 {
-    public enum MessageType { Hello, Chat, Private, PeerJoined, Bye, Ping }
+    public enum MessageType { Hello, Chat, Private, PeerJoined, Bye, Ping, PeerList }
+
+    public sealed record PeerInfo(string Nickname, string Host, int Port);
 
     public sealed record WireMessage(
         MessageType Type,
@@ -12,7 +14,8 @@ namespace ChatDistribuido
         string? Text,
         string? ListenHost,
         int? ListenPort,
-        DateTimeOffset Timestamp)
+        DateTimeOffset Timestamp,
+        IReadOnlyList<PeerInfo>? Peers = null)
     {
         private static readonly JsonSerializerOptions JsonOptions = new()
         {
@@ -43,5 +46,8 @@ namespace ChatDistribuido
 
         public static WireMessage Ping(string from) =>
             new(MessageType.Ping, from, null, null, null, null, DateTimeOffset.UtcNow);
+
+        public static WireMessage PeerList(string from, IReadOnlyList<PeerInfo> peers) =>
+            new(MessageType.PeerList, from, null, null, null, null, DateTimeOffset.UtcNow, peers);
     }
 }

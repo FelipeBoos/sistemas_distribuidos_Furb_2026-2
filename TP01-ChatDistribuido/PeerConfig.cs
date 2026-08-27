@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.RegularExpressions;
 
 namespace ChatDistribuido
 {
@@ -67,19 +68,50 @@ namespace ChatDistribuido
             return new NodeConfig(port.Value, name, host, ParsePeerList(peers));
         }
 
+        private static readonly Regex SubnetWildcardPattern =
+            new(@"^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.\*$", RegexOptions.Compiled);
+
+        /// <summary>Nenhuma conexão real usa essa porta: entradas de peer só com host (sem
+        /// porta), usadas para peers de outra rede, sempre têm a porta sobrescrita pela
+        /// regra de rede diferente (<see cref="NetworkRules.ResolveDialPort"/>).</summary>
+        private const int NoPortPlaceholder = 0;
+
         private static IReadOnlyList<(string Host, int Port)> ParsePeerList(IEnumerable<string> entries)
         {
             var result = new List<(string, int)>();
             foreach (var entry in entries)
             {
+                if (!entry.Contains(':'))
+                {
+                    result.Add((entry, NoPortPlaceholder));
+                    continue;
+                }
+
                 var parts = entry.Split(':', 2);
                 if (parts.Length != 2 || !int.TryParse(parts[1], out var port))
                     throw new ArgumentException($"Par inválido em 'peers': '{entry}'. Formato esperado host:porta.");
+
+                if (parts[0].EndsWith(".*", StringComparison.Ordinal))
+                    ValidateSubnetWildcard(parts[0], entry);
 
                 result.Add((parts[0], port));
             }
             return result;
         }
+
+        private static void ValidateSubnetWildcard(string host, string entry)
+        {
+            var match = SubnetWildcardPattern.Match(host);
+            if (!match.Success ||
+                !IsValidOctet(match.Groups[1].Value) ||
+                !IsValidOctet(match.Groups[2].Value) ||
+                !IsValidOctet(match.Groups[3].Value))
+                throw new ArgumentException(
+                    $"Faixa de sub-rede inválida em 'peers': '{entry}'. Formato esperado a.b.c.*:porta com octetos 0-255.");
+        }
+
+        private static bool IsValidOctet(string value) =>
+            int.TryParse(value, out var octet) && octet is >= 0 and <= 255;
 
         private sealed class ConfigFile
         {
