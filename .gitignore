@@ -9,3 +9,5 @@ obj/
 
 # Claude Code local state
 .claude/
+CLAUDE.md
+MEMORY.md
