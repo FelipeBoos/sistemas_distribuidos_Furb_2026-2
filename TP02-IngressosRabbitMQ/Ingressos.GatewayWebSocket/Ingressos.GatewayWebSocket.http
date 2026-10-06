@@ -1,0 +1,6 @@
+@Ingressos.GatewayWebSocket_HostAddress = http://localhost:5120
+
+GET {{Ingressos.GatewayWebSocket_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###

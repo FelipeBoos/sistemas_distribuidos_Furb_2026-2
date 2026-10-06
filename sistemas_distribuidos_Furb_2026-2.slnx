@@ -1,5 +1,23 @@
 <Solution>
-  <Project Path="SocketChat/SocketChat.csproj" />
-  <Project Path="TP01-ChatDistribuido/TP01-ChatDistribuido.csproj" />
-  <Project Path="TP01-ChatDistribuido.Tests/ChatDistribuido.Tests.csproj" />
+  <Folder Name="/TP01-ChatDistribuido/">
+    <Project Path="SocketChat/SocketChat.csproj" />
+    <Project Path="TP01-ChatDistribuido/TP01-ChatDistribuido.csproj" />
+    <Project Path="TP01-ChatDistribuido.Tests/ChatDistribuido.Tests.csproj" />
+  </Folder>
+  <Folder Name="/TP02-IngressosRabbitMQ/">
+    <Project Path="TP02-IngressosRabbitMQ/Ingressos.Domain/Ingressos.Domain.csproj" />
+    <Project Path="TP02-IngressosRabbitMQ/Ingressos.Contracts/Ingressos.Contracts.csproj" />
+    <Project Path="TP02-IngressosRabbitMQ/Ingressos.ApiVendas/Ingressos.ApiVendas.csproj" />
+    <Project Path="TP02-IngressosRabbitMQ/Ingressos.Admissor/Ingressos.Admissor.csproj" />
+    <Project Path="TP02-IngressosRabbitMQ/Ingressos.Alocador/Ingressos.Alocador.csproj" />
+    <Project Path="TP02-IngressosRabbitMQ/Ingressos.ServicoPagamento/Ingressos.ServicoPagamento.csproj" />
+    <Project Path="TP02-IngressosRabbitMQ/Ingressos.Antifraude/Ingressos.Antifraude.csproj" />
+    <Project Path="TP02-IngressosRabbitMQ/Ingressos.LiberadorReserva/Ingressos.LiberadorReserva.csproj" />
+    <Project Path="TP02-IngressosRabbitMQ/Ingressos.EmissorIngresso/Ingressos.EmissorIngresso.csproj" />
+    <Project Path="TP02-IngressosRabbitMQ/Ingressos.Notificador/Ingressos.Notificador.csproj" />
+    <Project Path="TP02-IngressosRabbitMQ/Ingressos.GatewayWebSocket/Ingressos.GatewayWebSocket.csproj" />
+    <Project Path="TP02-IngressosRabbitMQ/Ingressos.Auditoria/Ingressos.Auditoria.csproj" />
+    <Project Path="TP02-IngressosRabbitMQ/Ingressos.OutboxRelay/Ingressos.OutboxRelay.csproj" />
+    <Project Path="TP02-IngressosRabbitMQ/Ingressos.Tests/Ingressos.Tests.csproj" />
+  </Folder>
 </Solution>

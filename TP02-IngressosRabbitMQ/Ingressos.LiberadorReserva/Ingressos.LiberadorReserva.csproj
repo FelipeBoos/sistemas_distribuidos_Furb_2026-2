@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk.Worker">
+
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <UserSecretsId>dotnet-Ingressos.LiberadorReserva-0c7b0c7f-3e64-4cfb-a785-94c2bde21513</UserSecretsId>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Hosting" Version="9.0.19" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Ingressos.Domain\Ingressos.Domain.csproj" />
+    <ProjectReference Include="..\Ingressos.Contracts\Ingressos.Contracts.csproj" />
+  </ItemGroup>
+</Project>
