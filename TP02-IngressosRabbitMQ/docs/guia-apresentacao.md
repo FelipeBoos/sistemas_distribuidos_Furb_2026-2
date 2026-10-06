@@ -92,6 +92,19 @@ repositório não deve conter segredos). Fluxo:
    (serialização entre serviços, concorrência de canal AMQP, locale do SO) só aparecem rodando
    de verdade contra a infraestrutura real.
 
+10. **As duas demonstrações do Tópico 4 testadas e confirmadas** (ver `MEMORY.md`, entrada
+    "Demonstração comparativa de SAC..."):
+    - Comparativo com/sem SAC: sem SAC, o log mostra `duplicate key value violates unique
+      constraint "IX_Reservas_AssentoId"` — prova de que a corrida acontece de verdade (duas
+      réplicas tentaram reservar o mesmo assento ao mesmo tempo); com SAC, essa exceção nunca
+      aparece, porque a corrida nunca chega a acontecer. Ótimo gancho pra explicar "defesa em
+      profundidade" na apresentação: SAC evita a corrida, o índice único do banco é a rede de
+      segurança caso ela aconteça mesmo assim.
+    - Teste de caos local: derrubar uma das duas réplicas do Alocador no meio de 20 solicitações
+      concorrentes não gerou nenhuma reserva duplicada — a réplica restante assumiu via failover
+      do SAC. Um bug no próprio script (`infra/chaos-test-local.ps1`) foi corrigido no processo
+      (caminho com espaço quebrava o `Start-Process -ArgumentList`).
+
 ## Por que o Docker foi descartado
 
 A ideia original (Tópico 3) era rodar tudo via `docker compose up --build`: cluster RabbitMQ de

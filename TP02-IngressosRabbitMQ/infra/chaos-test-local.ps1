@@ -24,14 +24,20 @@ $raiz = Split-Path -Parent $PSScriptRoot
 Write-Host "Subindo 2 instancias locais do Alocador para o setor '$Setor' (Single Active Consumer decide qual processa)..."
 $env:ALOCADOR_SETOR = $Setor
 
-$alocador1 = Start-Process dotnet -ArgumentList "run", "--project", (Join-Path $raiz "Ingressos.Alocador") -PassThru -WindowStyle Minimized
-$alocador2 = Start-Process dotnet -ArgumentList "run", "--project", (Join-Path $raiz "Ingressos.Alocador") -PassThru -WindowStyle Minimized
+# Caminhos com espaco (ex.: "Area de Trabalho") quebram o particionamento automatico de
+# -ArgumentList quando o array mistura strings e numeros - por isso cada comando e montado como
+# uma unica string, com o caminho entre aspas duplas explicitas.
+$caminhoAlocador = Join-Path $raiz "Ingressos.Alocador"
+$caminhoDemonstracoes = Join-Path $raiz "Ingressos.Demonstracoes"
+
+$alocador1 = Start-Process dotnet -ArgumentList "run --project `"$caminhoAlocador`"" -PassThru -WindowStyle Minimized
+$alocador2 = Start-Process dotnet -ArgumentList "run --project `"$caminhoAlocador`"" -PassThru -WindowStyle Minimized
 
 Write-Host "Aguardando os dois processos conectarem ao RabbitMQ..."
 Start-Sleep -Seconds 8
 
 Write-Host "Disparando o gerador de carga ($Solicitacoes solicitacoes concorrentes)..."
-$demonstracoes = Start-Process dotnet -ArgumentList "run", "--project", (Join-Path $raiz "Ingressos.Demonstracoes"), "--", $Setor, $Assentos, $Solicitacoes -PassThru -NoNewWindow -Wait:$false
+$demonstracoes = Start-Process dotnet -ArgumentList "run --project `"$caminhoDemonstracoes`" -- $Setor $Assentos $Solicitacoes" -PassThru -NoNewWindow -Wait:$false
 
 Start-Sleep -Seconds 3
 Write-Host "Derrubando uma das instancias do Alocador (PID $($alocador1.Id)) no meio da carga..."
