@@ -1,0 +1,302 @@
+name: ingressos
+
+x-app-env: &app-env
+  RABBITMQ_HOSTS: rabbitmq1,rabbitmq2,rabbitmq3
+  RABBITMQ_VHOST: ${RABBITMQ_VHOST}
+  RABBITMQ_USER: ${RABBITMQ_USER}
+  RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD}
+  POSTGRES_HOST: postgres
+  POSTGRES_PORT: 5432
+  POSTGRES_DB: ${POSTGRES_DB}
+  POSTGRES_USER: ${POSTGRES_USER}
+  POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+
+x-app-depends-on: &app-depends-on
+  rabbitmq1:
+    condition: service_healthy
+  postgres:
+    condition: service_healthy
+  ingressos-migrator:
+    condition: service_completed_successfully
+
+services:
+  # --- Infraestrutura ---
+
+  rabbitmq1:
+    image: rabbitmq:4-management
+    hostname: rabbitmq1
+    environment:
+      RABBITMQ_ERLANG_COOKIE: ${RABBITMQ_ERLANG_COOKIE}
+      RABBITMQ_NODENAME: rabbit@rabbitmq1
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD}
+      RABBITMQ_DEFAULT_VHOST: ${RABBITMQ_VHOST}
+    volumes:
+      - ./infra/rabbitmq/join-cluster.sh:/join-cluster.sh:ro
+      - rabbitmq1-data:/var/lib/rabbitmq
+    command: ["sh", "/join-cluster.sh"]
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+    networks: [ingressos-net]
+
+  rabbitmq2:
+    image: rabbitmq:4-management
+    hostname: rabbitmq2
+    environment:
+      RABBITMQ_ERLANG_COOKIE: ${RABBITMQ_ERLANG_COOKIE}
+      RABBITMQ_NODENAME: rabbit@rabbitmq2
+      RABBITMQ_JOIN_CLUSTER_NODE: rabbit@rabbitmq1
+    volumes:
+      - ./infra/rabbitmq/join-cluster.sh:/join-cluster.sh:ro
+      - rabbitmq2-data:/var/lib/rabbitmq
+    command: ["sh", "/join-cluster.sh"]
+    depends_on:
+      rabbitmq1:
+        condition: service_healthy
+    networks: [ingressos-net]
+
+  rabbitmq3:
+    image: rabbitmq:4-management
+    hostname: rabbitmq3
+    environment:
+      RABBITMQ_ERLANG_COOKIE: ${RABBITMQ_ERLANG_COOKIE}
+      RABBITMQ_NODENAME: rabbit@rabbitmq3
+      RABBITMQ_JOIN_CLUSTER_NODE: rabbit@rabbitmq1
+    volumes:
+      - ./infra/rabbitmq/join-cluster.sh:/join-cluster.sh:ro
+      - rabbitmq3-data:/var/lib/rabbitmq
+    command: ["sh", "/join-cluster.sh"]
+    depends_on:
+      rabbitmq1:
+        condition: service_healthy
+    networks: [ingressos-net]
+
+  postgres:
+    image: postgres:17
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks: [ingressos-net]
+
+  mailpit:
+    image: axllent/mailpit
+    ports:
+      - "8025:8025" # UI web
+      - "1025:1025" # SMTP
+    networks: [ingressos-net]
+
+  # --- Migracao de schema (roda uma vez e encerra) ---
+
+  ingressos-migrator:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        PROJECT_NAME: Ingressos.Migrator
+    environment:
+      <<: *app-env
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks: [ingressos-net]
+
+  # --- Servicos de aplicacao (um container por servico, Figura 2 do documento) ---
+
+  ingressos-apivendas:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        PROJECT_NAME: Ingressos.ApiVendas
+    environment:
+      <<: *app-env
+      ASPNETCORE_URLS: http://+:8080
+    ports:
+      - "8080:8080"
+    depends_on: *app-depends-on
+    networks: [ingressos-net]
+
+  ingressos-admissor:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        PROJECT_NAME: Ingressos.Admissor
+    environment:
+      <<: *app-env
+    depends_on: *app-depends-on
+    networks: [ingressos-net]
+
+  ingressos-alocador-pista:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        PROJECT_NAME: Ingressos.Alocador
+    environment:
+      <<: *app-env
+      ALOCADOR_SETOR: pista
+      ALOCADOR_SINGLE_ACTIVE_CONSUMER: ${ALOCADOR_SINGLE_ACTIVE_CONSUMER}
+    depends_on: *app-depends-on
+    networks: [ingressos-net]
+
+  ingressos-alocador-cadeira:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        PROJECT_NAME: Ingressos.Alocador
+    environment:
+      <<: *app-env
+      ALOCADOR_SETOR: cadeira
+      ALOCADOR_SINGLE_ACTIVE_CONSUMER: ${ALOCADOR_SINGLE_ACTIVE_CONSUMER}
+    depends_on: *app-depends-on
+    networks: [ingressos-net]
+
+  ingressos-alocador-camarote:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        PROJECT_NAME: Ingressos.Alocador
+    environment:
+      <<: *app-env
+      ALOCADOR_SETOR: camarote
+      ALOCADOR_SINGLE_ACTIVE_CONSUMER: ${ALOCADOR_SINGLE_ACTIVE_CONSUMER}
+    depends_on: *app-depends-on
+    networks: [ingressos-net]
+
+  ingressos-antifraude:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        PROJECT_NAME: Ingressos.Antifraude
+    environment:
+      <<: *app-env
+      ANTIFRAUDE_TAXA_RISCO_ALTO: ${ANTIFRAUDE_TAXA_RISCO_ALTO}
+    depends_on: *app-depends-on
+    networks: [ingressos-net]
+
+  ingressos-servicopagamento:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        PROJECT_NAME: Ingressos.ServicoPagamento
+    environment:
+      <<: *app-env
+      SERVICOPAGAMENTO_TAXA_RECUSA: ${SERVICOPAGAMENTO_TAXA_RECUSA}
+    depends_on: *app-depends-on
+    networks: [ingressos-net]
+
+  ingressos-liberadorreserva:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        PROJECT_NAME: Ingressos.LiberadorReserva
+    environment:
+      <<: *app-env
+    depends_on: *app-depends-on
+    networks: [ingressos-net]
+
+  ingressos-emissoringresso:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        PROJECT_NAME: Ingressos.EmissorIngresso
+    environment:
+      <<: *app-env
+    depends_on: *app-depends-on
+    networks: [ingressos-net]
+
+  ingressos-notificador:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        PROJECT_NAME: Ingressos.Notificador
+    environment:
+      <<: *app-env
+      SMTP_HOST: mailpit
+      SMTP_PORT: 1025
+    depends_on:
+      <<: *app-depends-on
+    networks: [ingressos-net]
+
+  ingressos-gatewaywebsocket:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        PROJECT_NAME: Ingressos.GatewayWebSocket
+    environment:
+      <<: *app-env
+      ASPNETCORE_URLS: http://+:8081
+    ports:
+      - "8081:8081"
+    depends_on: *app-depends-on
+    networks: [ingressos-net]
+
+  ingressos-auditoria:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        PROJECT_NAME: Ingressos.Auditoria
+    environment:
+      <<: *app-env
+    depends_on: *app-depends-on
+    networks: [ingressos-net]
+
+  ingressos-outboxrelay:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        PROJECT_NAME: Ingressos.OutboxRelay
+    environment:
+      <<: *app-env
+    depends_on: *app-depends-on
+    networks: [ingressos-net]
+
+  # --- Ferramenta de demonstracao (nao sobe com "docker compose up"; ver docs/topicos-3-4-5.md) ---
+
+  ingressos-demonstracoes:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        PROJECT_NAME: Ingressos.Demonstracoes
+    environment:
+      <<: *app-env
+    profiles: ["demo"]
+    networks: [ingressos-net]
+
+networks:
+  ingressos-net:
+
+volumes:
+  rabbitmq1-data:
+  rabbitmq2-data:
+  rabbitmq3-data:
+  postgres-data:

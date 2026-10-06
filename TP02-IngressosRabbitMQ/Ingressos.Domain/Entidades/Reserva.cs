@@ -19,4 +19,7 @@ public class Reserva
     public DateTime CriadaEm { get; set; }
     public DateTime ExpiraEm { get; set; }
     public StatusReserva Status { get; set; } = StatusReserva.Solicitada;
+
+    // Usado na validacao da cota de meia-entrada (Lei 12.933/2013) feita pelo Alocador.
+    public bool MeiaEntrada { get; set; }
 }

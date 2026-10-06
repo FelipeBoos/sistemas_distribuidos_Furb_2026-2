@@ -7,6 +7,10 @@
   <Folder Name="/TP02-IngressosRabbitMQ/">
     <Project Path="TP02-IngressosRabbitMQ/Ingressos.Domain/Ingressos.Domain.csproj" />
     <Project Path="TP02-IngressosRabbitMQ/Ingressos.Contracts/Ingressos.Contracts.csproj" />
+    <Project Path="TP02-IngressosRabbitMQ/Ingressos.Messaging/Ingressos.Messaging.csproj" />
+    <Project Path="TP02-IngressosRabbitMQ/Ingressos.Persistence/Ingressos.Persistence.csproj" />
+    <Project Path="TP02-IngressosRabbitMQ/Ingressos.Migrator/Ingressos.Migrator.csproj" />
+    <Project Path="TP02-IngressosRabbitMQ/Ingressos.Demonstracoes/Ingressos.Demonstracoes.csproj" />
     <Project Path="TP02-IngressosRabbitMQ/Ingressos.ApiVendas/Ingressos.ApiVendas.csproj" />
     <Project Path="TP02-IngressosRabbitMQ/Ingressos.Admissor/Ingressos.Admissor.csproj" />
     <Project Path="TP02-IngressosRabbitMQ/Ingressos.Alocador/Ingressos.Alocador.csproj" />
