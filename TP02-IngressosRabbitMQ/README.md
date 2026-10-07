@@ -57,6 +57,24 @@ curl -X POST https://localhost:7000/pagamentos -H "Content-Type: application/jso
 Ver `docs/topicos-3-4-5.md` (Tópico 4) para os casos de uso completos, incluindo as
 demonstrações de Single Active Consumer e de tolerância a falhas (teste de caos).
 
+## Demonstração rápida (para o professor)
+
+Pré-requisito: `.env` preenchido e `Ingressos.Migrator` já executado uma vez.
+
+**Opção 1: tela no navegador.** Suba os 11 serviços pelo Visual Studio (ou com `dotnet run`), e
+abra `http://localhost:5224/` (porta do `Ingressos.ApiVendas` no `launchSettings.json`). Escolha
+o setor e a quantidade, clique em **Comprar** e acompanhe a linha do tempo: reserva, pagamento e
+ingresso emitido com o QR code. O e-mail chega na caixa do Mailtrap.
+
+**Opção 2: terminal, com um comando.** A partir de `TP02-IngressosRabbitMQ/`:
+
+```powershell
+./infra/demo-compra.ps1 -Setor pista -Quantidade 2
+```
+
+O script compila a solução, sobe os serviços necessários, faz o pedido e paga cada reserva, mostra
+o resultado e encerra todos os processos que ele iniciou ao final.
+
 ## Projetos
 
 | Projeto | Tipo | Papel |

@@ -19,7 +19,8 @@ Quadro 3 – Parâmetros de configuração implementados
 | `pagamento.retry.5s` / `.30s` / `.2m` | `x-message-ttl` crescente, `x-dead-letter-exchange: ingressos.eventos`, `x-dead-letter-routing-key: pagamento.solicitado` | Cada fila expira e devolve a mensagem para nova tentativa de cobrança |
 | `pagamento-parking-lot` | fila durável comum | Revisão manual após 3 tentativas de retry esgotadas |
 | `antifraude` | fila durável comum | Consumida em padrão RPC (`reply_to` + `correlation_id`) |
-| `auditoria-stream` | `x-queue-type: stream`, binding `#` | Permite replay do histórico completo desde o início |
+| `ingressos.dlq` / `dlq.ingressos` | fanout durável, fila durável comum | Dead-letter das filas de consumo (`alocacao.*`, `pagamento`, `antifraude`, `emissao`, `notificacao`): mensagens rejeitadas sem *requeue* ficam aqui para análise, em vez de serem descartadas |
+| `auditoria-stream` | `x-queue-type: stream`, `x-max-age: 1h`, `x-max-length-bytes: 50 MB`; bindings `fila.#`, `antifraude.#`, `compra.#`, `reserva.#`, `pagamento.#`, `ingresso.#`, `assento.#` | Histórico de eventos de negócio com replay desde o início. Não recebe o heartbeat `sala-espera.status` |
 
 A contagem de tentativas de pagamento é controlada por um header de aplicação
 (`x-tentativa`) propagado nas mensagens republicadas, em vez de depender do header `x-death`
@@ -123,8 +124,9 @@ serialização e validação de schema mais rígida, mas exigiriam infraestrutur
   reentregas; serviços de emissão e alocação verificam existência antes de gravar.
 - **Publisher confirms + ack manual**: o produtor aguarda confirmação de persistência do
   broker; o consumidor só confirma (`ack`) após concluir o processamento com sucesso,
-  encaminhando falhas para `nack` sem *requeue* (deixando a mensagem seguir para a
-  dead-letter-exchange da fila, quando configurada).
+  encaminhando falhas para `nack` sem *requeue*: a mensagem segue para `ingressos.dlq`
+  (ver Quadro 3). Se o serviço estiver sendo desligado no meio de um processamento, a mensagem é
+  devolvida à fila (`requeue`), para ser reprocessada no próximo start.
 - **Padrão Outbox**: gravação da entidade de domínio e do evento a publicar na mesma transação
   (`Ingressos.Persistence.OutboxMessage`), com o `Ingressos.OutboxRelay` publicando de forma
   assíncrona — elimina o risco de gravar no banco sem publicar o evento correspondente (ou
@@ -135,3 +137,68 @@ serialização e validação de schema mais rígida, mas exigiriam infraestrutur
   tudo vem de variáveis de ambiente (`RabbitMqOptions.FromEnvironment()`,
   `PostgresOptions.ConnectionStringFromEnvironment()`), permitindo rodar o mesmo código em
   qualquer máquina apenas trocando o `.env`.
+
+## 5.4 Revisão final e correções encontradas na execução
+
+Após a implementação, o código passou por uma revisão final (uma revisão com contexto e uma
+revisão cega, sem acesso à narrativa do trabalho) e por testes contra a infraestrutura real
+(CloudAMQP, Neon e Mailtrap). Os principais pontos tratados:
+
+- **Dead-letter em todas as filas de consumo.** Antes, só `reservas-pendentes` tinha DLX, e uma
+  falha em qualquer consumidor descartava a mensagem sem registro. Agora as filas de consumo
+  enviam rejeições para `ingressos.dlq` (Quadro 3).
+- **Quantidade de ingressos.** Cada ingresso gera uma reserva (um assento por reserva). A
+  compra é tudo ou nada: se o setor não tem assentos para a quantidade toda, nenhuma reserva é
+  criada. A quantidade é validada entre 1 e 4 na API de Vendas e novamente no Alocador.
+- **Preço no servidor.** O cliente não informa mais o valor do pagamento. O `ServicoPagamento`
+  calcula o valor a partir do preço do setor da reserva, com meia-entrada em 50% do preço.
+- **Limite por CPF entre setores.** Cada setor tem sua própria fila (com Single Active Consumer),
+  então duas compras do mesmo usuário em setores diferentes podiam ler a contagem ao mesmo tempo.
+  O Alocador agora trava a linha do usuário (`SELECT ... FOR UPDATE`) dentro da transação de
+  reserva. A consulta ao antifraude fica fora dessa transação, para não segurar o lock durante a
+  chamada RPC.
+- **Antifraude fail-closed.** Se o antifraude não responder em 5 segundos, ou houver falha de
+  infraestrutura na chamada, a compra é rejeitada com o motivo `antifraude_indisponivel`. Antes a
+  compra era aprovada nesse caso.
+- **Criação concorrente de usuário.** Duas primeiras compras simultâneas do mesmo CPF não geram mais
+  erro de chave primária: o segundo processo relê o registro criado pelo primeiro.
+- **Resposta honesta da API.** Quando o broker não confirma a publicação, a API responde 503
+  em vez de 202. A routing key de uma compra é derivada do setor lido no banco, nunca de texto
+  livre enviado pelo cliente.
+
+### Problemas que só apareceram com a infraestrutura real
+
+- **Limite de taxa do Mailtrap.** O plano gratuito recusa rajadas de envio (`Too many emails per
+  second`). Com prefetch alto no Notificador, os e-mails excedentes iam para a DLQ e se perdiam.
+  O Notificador agora processa um e-mail por vez e tenta de novo, com espera crescente, antes de
+  desistir.
+- **Heartbeat do Admissor na auditoria.** O Admissor publicava o status da sala de espera a
+  cada segundo, e o binding `#` da stream de auditoria copiava cada publicação. Isso gerava
+  cerca de 3.600 mensagens por hora com a aplicação rodando, mesmo sem nenhuma compra. Agora o
+  status é publicado só quando o total muda (ou a cada 30 segundos), e a stream recebe apenas os
+  eventos de negócio.
+- **Retenção da stream.** A stream não apaga mensagens ao ser consumida, e a retenção só é
+  aplicada quando um segmento fecha. A conta gratuita impõe segmentos de 5 MB (política
+  `stream-limits`), então com volume baixo a limpeza por tempo quase não tem efeito. Por isso a
+  correção principal foi reduzir o volume enviado à stream.
+- **Antifraude aleatório na demonstração.** O antifraude sorteia risco alto com a taxa de
+  `ANTIFRAUDE_TAXA_RISCO_ALTO`. Com 5%, uma demonstração falhava por sorteio. O script de
+  demonstração fixa a taxa em 0 (configurável por parâmetro).
+- **Leitura de JSON no PowerShell 5.1.** A chamada `@(Invoke-RestMethod ...)` com pipeline
+  desempacota o array como um único item. O script de demonstração usa uma função que devolve
+  os itens individualmente.
+
+### Demonstração para o professor
+
+Há duas formas de mostrar uma compra completa (ver `README.md`, seção "Demonstração rápida"):
+
+- **Tela no navegador**, servida pela própria API em `http://localhost:5224/`. Mostra a linha do
+  tempo da compra: reserva criada, pagamento solicitado, pagamento aprovado e ingresso emitido,
+  com o QR code.
+- **Script de terminal** (`infra/demo-compra.ps1`). Faz a mesma sequência e encerra, ao final,
+  todos os processos que iniciou (árvore inteira, via `taskkill /T`). Os logs de cada serviço
+  ficam em `%TEMP%\ingressos-demo`.
+
+Validado em execução real: compra de 2 ingressos gerando 2 reservas, 2 pagamentos aprovados e
+2 ingressos emitidos; limite por CPF de 4 respeitado com duas compras simultâneas em setores
+diferentes (3 reservas, não 6).

@@ -11,6 +11,7 @@ obj/
 .claude/
 CLAUDE.md
 MEMORY.md
+/history
 
 # Credenciais locais de ambiente (docker compose e nuvem)
 TP02-IngressosRabbitMQ/.env

@@ -16,11 +16,15 @@ public static class PostgresOptions
             return connectionString;
         }
 
-        var host = Environment.GetEnvironmentVariable("POSTGRES_HOST") ?? "localhost";
+        // Sem POSTGRES_CONNECTION_STRING nao ha credencial padrao: falha explicita.
+        var host = Environment.GetEnvironmentVariable("POSTGRES_HOST")
+            ?? throw new InvalidOperationException("Defina POSTGRES_CONNECTION_STRING no arquivo .env (ver .env.example).");
         var port = Environment.GetEnvironmentVariable("POSTGRES_PORT") ?? "5432";
         var database = Environment.GetEnvironmentVariable("POSTGRES_DB") ?? "ingressos";
-        var user = Environment.GetEnvironmentVariable("POSTGRES_USER") ?? "ingressos";
-        var password = Environment.GetEnvironmentVariable("POSTGRES_PASSWORD") ?? "ingressos";
+        var user = Environment.GetEnvironmentVariable("POSTGRES_USER")
+            ?? throw new InvalidOperationException("Defina POSTGRES_USER no arquivo .env.");
+        var password = Environment.GetEnvironmentVariable("POSTGRES_PASSWORD")
+            ?? throw new InvalidOperationException("Defina POSTGRES_PASSWORD no arquivo .env.");
 
         return $"Host={host};Port={port};Database={database};Username={user};Password={password}";
     }

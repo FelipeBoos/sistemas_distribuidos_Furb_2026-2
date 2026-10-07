@@ -1,4 +1,3 @@
-using System.Text;
 using Ingressos.Messaging;
 using RabbitMQ.Client;
 
@@ -16,10 +15,12 @@ public class Worker(ILogger<Worker> logger) : ConsumidorBase(logger)
         ["x-stream-offset"] = "first"
     };
 
+    // So o tipo e o identificador vao para o log: o payload pode conter dados sensiveis (ex.: o QR
+    // code do ingresso, que valida a entrada no evento) e nao deve ficar legivel em logs.
     protected override Task ProcessarAsync(ReadOnlyMemory<byte> corpo, IReadOnlyBasicProperties propriedades, CancellationToken ct)
     {
-        logger.LogInformation("[AUDITORIA] {Tipo} ({MessageId}): {Payload}",
-            propriedades.Type, propriedades.MessageId, Encoding.UTF8.GetString(corpo.Span));
+        logger.LogInformation("[AUDITORIA] {Tipo} ({MessageId}), {Bytes} byte(s)",
+            propriedades.Type, propriedades.MessageId, corpo.Length);
         return Task.CompletedTask;
     }
 }

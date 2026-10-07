@@ -41,6 +41,12 @@ public abstract class ConsumidorBase(ILogger logger) : BackgroundService
                 await ProcessarAsync(ea.Body, ea.BasicProperties, stoppingToken);
                 await _canal.BasicAckAsync(ea.DeliveryTag, multiple: false);
             }
+            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+            {
+                // Desligamento do servico no meio do processamento: devolve a mensagem para a fila
+                // em vez de descarta-la (ela sera reentregue no proximo start).
+                await _canal.BasicNackAsync(ea.DeliveryTag, multiple: false, requeue: true);
+            }
             catch (Exception ex)
             {
                 logger.LogError(ex, "Falha ao processar mensagem da fila {Fila}", Fila);
@@ -86,11 +92,13 @@ public abstract class ConsumidorBase(ILogger logger) : BackgroundService
 
     public override async Task StopAsync(CancellationToken cancellationToken)
     {
+        // Para o consumo (cancela stoppingToken) antes de fechar a conexao, para que handlers em
+        // andamento ainda consigam dar ack/nack no canal.
+        await base.StopAsync(cancellationToken);
+
         if (_conexao is not null)
         {
             await _conexao.DisposeAsync();
         }
-
-        await base.StopAsync(cancellationToken);
     }
 }

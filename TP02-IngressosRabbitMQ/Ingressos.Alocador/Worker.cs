@@ -2,21 +2,27 @@ using System.Text.Json;
 using Ingressos.Contracts.Comandos;
 using Ingressos.Contracts.Eventos;
 using Ingressos.Domain.Entidades;
+using Ingressos.Domain.Regras;
 using Ingressos.Messaging;
 using Ingressos.Persistence;
 using Microsoft.EntityFrameworkCore;
+using Npgsql;
 using RabbitMQ.Client;
 
 namespace Ingressos.Alocador;
 
-// Reserva o assento sem overbooking (Topico 2.1). 1 instancia logica por setor (fila dedicada,
+// Reserva os assentos sem overbooking (Topico 2.1). 1 instancia logica por setor (fila dedicada,
 // consumida com Single Active Consumer quando ALOCADOR_SINGLE_ACTIVE_CONSUMER != "false").
-// Valida o limite de ingressos por CPF e a cota de meia-entrada (Lei 12.933/2013) antes de
-// gravar a reserva e o evento de outbox na mesma transacao.
+// Cada ingresso da compra vira uma reserva. Limite por CPF e cota de meia-entrada (Lei 12.933/2013)
+// sao validados dentro de uma transacao que trava a linha do usuario, para que compras do mesmo
+// CPF em setores diferentes (filas diferentes) nao leiam a contagem ao mesmo tempo.
 public class Worker(ILogger<Worker> logger, IDbContextFactory<IngressosDbContext> dbFactory) : ConsumidorBase(logger)
 {
     // Cota legal minima de meia-entrada por setor (simplificacao didatica da Lei 12.933/2013).
     private const double CotaMeiaEntrada = 0.4;
+
+    private const string SqlStateViolacaoUnica = "23505";
+    private const string IndiceAssentoUnico = "IX_Reservas_AssentoId";
 
     private static readonly string Setor = Environment.GetEnvironmentVariable("ALOCADOR_SETOR") ?? "pista";
 
@@ -33,6 +39,12 @@ public class Worker(ILogger<Worker> logger, IDbContextFactory<IngressosDbContext
     protected override async Task ProcessarAsync(ReadOnlyMemory<byte> corpo, IReadOnlyBasicProperties propriedades, CancellationToken ct)
     {
         var comando = MensagemPublisher.Desserializar<CompraSolicitadaCommand>(corpo);
+        if (!RegrasCompra.QuantidadeValida(comando.QuantidadeIngressos))
+        {
+            await PublicarRejeicaoAsync(comando.UsuarioId, "quantidade_invalida");
+            return;
+        }
+
         await using var db = await dbFactory.CreateDbContextAsync(ct);
 
         var setorEntidade = await db.Setores.FirstOrDefaultAsync(s => s.Id == comando.SetorId, ct);
@@ -44,27 +56,47 @@ public class Worker(ILogger<Worker> logger, IDbContextFactory<IngressosDbContext
 
         var usuario = await ObterOuCriarUsuarioAsync(db, comando.UsuarioId, ct);
 
+        // Antifraude fica fora da transacao: a consulta RPC leva ate 5 s e nao deve segurar o lock
+        // da linha do usuario durante esse tempo.
+        var motivoRejeicaoRisco = await AvaliarRiscoAsync(usuario.Id, ct);
+        if (motivoRejeicaoRisco is not null)
+        {
+            await PublicarRejeicaoAsync(comando.UsuarioId, motivoRejeicaoRisco);
+            return;
+        }
+
+        await using var transacao = await db.Database.BeginTransactionAsync(ct);
+
+        // Trava a linha do usuario: serializa compras do mesmo CPF entre setores. Sem isso, duas
+        // compras em filas diferentes poderiam ler a mesma contagem e ultrapassar o limite.
+        await db.Usuarios
+            .FromSqlInterpolated($"SELECT * FROM \"Usuarios\" WHERE \"Id\" = {usuario.Id} FOR UPDATE")
+            .AsNoTracking()
+            .FirstAsync(ct);
+
+        var quantidade = comando.QuantidadeIngressos;
+
         var reservasAtivas = await db.Reservas.CountAsync(r => r.UsuarioId == usuario.Id && StatusesAtivos.Contains(r.Status), ct);
-        if (reservasAtivas + comando.QuantidadeIngressos > usuario.LimiteIngressos)
+        if (reservasAtivas + quantidade > usuario.LimiteIngressos)
         {
             await PublicarRejeicaoAsync(comando.UsuarioId, "limite_cpf_excedido");
             return;
         }
 
-        if (comando.MeiaEntrada && !await CotaMeiaEntradaDisponivelAsync(db, setorEntidade, ct))
+        if (comando.MeiaEntrada && !await CotaMeiaEntradaDisponivelAsync(db, setorEntidade, quantidade, ct))
         {
             await PublicarRejeicaoAsync(comando.UsuarioId, "cota_meia_entrada_excedida");
             return;
         }
 
-        if (!await RiscoAceitavelAsync(usuario.Id, ct))
-        {
-            await PublicarRejeicaoAsync(comando.UsuarioId, "risco_antifraude_alto");
-            return;
-        }
+        // Tudo ou nada: se o setor nao tem assentos para a quantidade toda, nenhuma reserva e criada.
+        var assentos = await db.Assentos
+            .Where(a => a.SetorId == setorEntidade.Id && a.Status == StatusAssento.Disponivel)
+            .OrderBy(a => a.Codigo)
+            .Take(quantidade)
+            .ToListAsync(ct);
 
-        var assento = await db.Assentos.FirstOrDefaultAsync(a => a.SetorId == comando.SetorId && a.Status == StatusAssento.Disponivel, ct);
-        if (assento is null)
+        if (assentos.Count < quantidade)
         {
             if (Publisher is not null)
             {
@@ -74,40 +106,45 @@ public class Worker(ILogger<Worker> logger, IDbContextFactory<IngressosDbContext
             return;
         }
 
-        assento.Status = StatusAssento.Reservado;
-
-        var reserva = new Reserva
+        foreach (var assento in assentos)
         {
-            Id = Guid.NewGuid(),
-            UsuarioId = usuario.Id,
-            AssentoId = assento.Id,
-            CriadaEm = DateTime.UtcNow,
-            ExpiraEm = DateTime.UtcNow.AddMinutes(10),
-            // O diagrama de estados (Figura 5) separa "Reservada" de "AguardandoPagamento", mas
-            // nesta implementacao o assento ja fica aguardando pagamento assim que alocado - nao
-            // ha evento distinto entre as duas etapas (ver docs/guia-apresentacao.md).
-            Status = StatusReserva.AguardandoPagamento,
-            MeiaEntrada = comando.MeiaEntrada
-        };
-        db.Reservas.Add(reserva);
+            assento.Status = StatusAssento.Reservado;
 
-        var reservaCriada = new ReservaCriada(reserva.Id, reserva.UsuarioId, reserva.AssentoId, reserva.ExpiraEm);
-        db.OutboxMessages.Add(new OutboxMessage
-        {
-            RoutingKey = "reserva.criada",
-            TipoMensagem = nameof(ReservaCriada),
-            PayloadJson = JsonSerializer.Serialize(reservaCriada, JsonSerializacao.Opcoes)
-        });
+            var reserva = new Reserva
+            {
+                Id = Guid.NewGuid(),
+                UsuarioId = usuario.Id,
+                AssentoId = assento.Id,
+                CriadaEm = DateTime.UtcNow,
+                ExpiraEm = DateTime.UtcNow.AddMinutes(10),
+                // O diagrama de estados (Figura 5) separa "Reservada" de "AguardandoPagamento", mas
+                // nesta implementacao o assento ja fica aguardando pagamento assim que alocado - nao
+                // ha evento distinto entre as duas etapas (ver docs/guia-apresentacao.md).
+                Status = StatusReserva.AguardandoPagamento,
+                MeiaEntrada = comando.MeiaEntrada
+            };
+            db.Reservas.Add(reserva);
+
+            var reservaCriada = new ReservaCriada(reserva.Id, reserva.UsuarioId, reserva.AssentoId, reserva.ExpiraEm);
+            db.OutboxMessages.Add(new OutboxMessage
+            {
+                RoutingKey = "reserva.criada",
+                TipoMensagem = nameof(ReservaCriada),
+                PayloadJson = JsonSerializer.Serialize(reservaCriada, JsonSerializacao.Opcoes)
+            });
+        }
 
         try
         {
             await db.SaveChangesAsync(ct);
-            logger.LogInformation("Reserva {ReservaId} criada para assento {AssentoId} no setor {Setor}", reserva.Id, assento.Id, Setor);
+            await transacao.CommitAsync(ct);
+            logger.LogInformation("{Quantidade} reserva(s) criada(s) para o usuario {UsuarioId} no setor {Setor}", quantidade, usuario.Id, Setor);
         }
-        catch (DbUpdateException)
+        catch (DbUpdateException ex) when (EhViolacaoUnica(ex, IndiceAssentoUnico))
         {
             // Indice unico de Reserva.AssentoId violado: outro processo reservou o mesmo assento
             // primeiro (defesa em profundidade citada no Topico 2.3.3, mesmo com SAC habilitado).
+            // Qualquer outro erro de banco segue como excecao e vai para a DLQ.
             await PublicarRejeicaoAsync(comando.UsuarioId, "assento_concorrencia_detectada");
         }
     }
@@ -127,14 +164,25 @@ public class Worker(ILogger<Worker> logger, IDbContextFactory<IngressosDbContext
             Id = usuarioId,
             Cpf = usuarioId.ToString("N")[..11],
             Email = $"{usuarioId}@demo.ingressos.local",
-            LimiteIngressos = 4
+            LimiteIngressos = RegrasCompra.QuantidadeMaximaPorCompra
         };
         db.Usuarios.Add(usuario);
-        await db.SaveChangesAsync(ct);
-        return usuario;
+
+        try
+        {
+            await db.SaveChangesAsync(ct);
+            return usuario;
+        }
+        catch (DbUpdateException ex) when (EhViolacaoUnica(ex))
+        {
+            // Outra compra do mesmo usuario (em outro setor) criou o registro ao mesmo tempo:
+            // descarta a entidade local e relê o registro que ja existe.
+            db.Entry(usuario).State = EntityState.Detached;
+            return await db.Usuarios.FirstAsync(u => u.Id == usuarioId, ct);
+        }
     }
 
-    private static async Task<bool> CotaMeiaEntradaDisponivelAsync(IngressosDbContext db, Setor setor, CancellationToken ct)
+    private static async Task<bool> CotaMeiaEntradaDisponivelAsync(IngressosDbContext db, Setor setor, int quantidade, CancellationToken ct)
     {
         var cotaMaxima = (int)(setor.Capacidade * CotaMeiaEntrada);
         var meiaEntradaAtivas = await (
@@ -143,7 +191,7 @@ public class Worker(ILogger<Worker> logger, IDbContextFactory<IngressosDbContext
             where a.SetorId == setor.Id && r.MeiaEntrada && StatusesAtivos.Contains(r.Status)
             select r.Id).CountAsync(ct);
 
-        return meiaEntradaAtivas < cotaMaxima;
+        return meiaEntradaAtivas + quantidade <= cotaMaxima;
     }
 
     // Conexao AMQP dedicada para o RPC do Antifraude - precisa ser uma conexao (TCP) totalmente
@@ -155,14 +203,25 @@ public class Worker(ILogger<Worker> logger, IDbContextFactory<IngressosDbContext
     private RabbitMqConnection? _conexaoRpc;
     private IChannel? _canalRpc;
 
-    private async Task<bool> RiscoAceitavelAsync(Guid usuarioId, CancellationToken ct)
+    // Fail-closed: se o antifraude nao responder (timeout ou falha de infraestrutura), a compra e
+    // rejeitada. Retorna null quando o risco e aceitavel, ou o motivo da rejeicao.
+    private async Task<string?> AvaliarRiscoAsync(Guid usuarioId, CancellationToken ct)
     {
         try
         {
             if (_canalRpc is null)
             {
-                _conexaoRpc = await RabbitMqConnection.ConectarAsync(RabbitMqOptions.FromEnvironment(), "Ingressos.Alocador.Rpc");
-                _canalRpc = await _conexaoRpc.AbrirCanalAsync();
+                var conexao = await RabbitMqConnection.ConectarAsync(RabbitMqOptions.FromEnvironment(), "Ingressos.Alocador.Rpc");
+                try
+                {
+                    _canalRpc = await conexao.AbrirCanalAsync();
+                    _conexaoRpc = conexao;
+                }
+                catch
+                {
+                    await conexao.DisposeAsync();
+                    throw;
+                }
             }
 
             var rpc = new RpcCliente(_canalRpc);
@@ -170,12 +229,17 @@ public class Worker(ILogger<Worker> logger, IDbContextFactory<IngressosDbContext
                 "antifraude.solicitado",
                 new AntifraudeSolicitadoCommand(usuarioId, Guid.Empty, 0m),
                 TimeSpan.FromSeconds(5));
-            return resposta.RiscoAceitavel;
+            return resposta.RiscoAceitavel ? null : "risco_antifraude_alto";
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
-            logger.LogWarning("Timeout na consulta ao antifraude para o usuario {UsuarioId}; assumindo risco aceitavel", usuarioId);
-            return true;
+            logger.LogWarning("Timeout na consulta ao antifraude para o usuario {UsuarioId}; compra rejeitada (fail-closed)", usuarioId);
+            return "antifraude_indisponivel";
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Falha na consulta ao antifraude para o usuario {UsuarioId}; compra rejeitada (fail-closed)", usuarioId);
+            return "antifraude_indisponivel";
         }
     }
 
@@ -184,6 +248,21 @@ public class Worker(ILogger<Worker> logger, IDbContextFactory<IngressosDbContext
         if (Publisher is not null)
         {
             await Publisher.PublicarAsync($"compra.rejeitada.{Setor}", new CompraRejeitada(usuarioId, motivo));
+        }
+    }
+
+    // Verifica a violacao de unicidade pelo SQLSTATE 23505 (e, se informado, pelo nome do indice).
+    private static bool EhViolacaoUnica(DbUpdateException ex, string? indice = null) =>
+        ex.InnerException is PostgresException { SqlState: SqlStateViolacaoUnica } postgres
+        && (indice is null || postgres.ConstraintName == indice);
+
+    public override async Task StopAsync(CancellationToken cancellationToken)
+    {
+        await base.StopAsync(cancellationToken);
+
+        if (_conexaoRpc is not null)
+        {
+            await _conexaoRpc.DisposeAsync();
         }
     }
 }

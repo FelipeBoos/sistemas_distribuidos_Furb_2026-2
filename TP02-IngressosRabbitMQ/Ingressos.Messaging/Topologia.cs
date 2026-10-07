@@ -10,6 +10,11 @@ public static class NomesTopologia
     public const string ExchangeDlx = "ingressos.dlx";
     public const string ExchangeRetry = "ingressos.retry";
 
+    // Dead-letter das filas de consumo (fanout): mensagem rejeitada sem requeue cai em
+    // dlq.ingressos em vez de ser descartada. Separada de ingressos.dlx, que alimenta o Liberador.
+    public const string ExchangeDlq = "ingressos.dlq";
+    public const string FilaDlq = "dlq.ingressos";
+
     public static readonly string[] Setores = ["pista", "cadeira", "camarote"];
 
     public const string FilaSalaEspera = "sala-espera";
@@ -35,6 +40,12 @@ public static class Topologia
         await canal.ExchangeDeclareAsync(NomesTopologia.ExchangeEventos, ExchangeType.Topic, durable: true);
         await canal.ExchangeDeclareAsync(NomesTopologia.ExchangeDlx, ExchangeType.Fanout, durable: true);
         await canal.ExchangeDeclareAsync(NomesTopologia.ExchangeRetry, ExchangeType.Topic, durable: true);
+        await canal.ExchangeDeclareAsync(NomesTopologia.ExchangeDlq, ExchangeType.Fanout, durable: true);
+        await canal.QueueDeclareAsync(NomesTopologia.FilaDlq, durable: true, exclusive: false, autoDelete: false);
+        await canal.QueueBindAsync(NomesTopologia.FilaDlq, NomesTopologia.ExchangeDlq, routingKey: string.Empty);
+
+        // Argumentos das filas de consumo: mensagens rejeitadas (nack sem requeue) vao para a DLQ.
+        var argsDlq = new Dictionary<string, object?> { ["x-dead-letter-exchange"] = NomesTopologia.ExchangeDlq };
 
         // fila.entrar -> sala-espera (backpressure: rejeita publicacao quando a fila esta cheia)
         await canal.QueueDeclareAsync("sala-espera", durable: true, exclusive: false, autoDelete: false,
@@ -54,7 +65,7 @@ public static class Topologia
         var sacHabilitado = Environment.GetEnvironmentVariable("ALOCADOR_SINGLE_ACTIVE_CONSUMER") != "false";
         foreach (var setor in NomesTopologia.Setores)
         {
-            var args = new Dictionary<string, object?> { ["x-queue-type"] = "quorum" };
+            var args = new Dictionary<string, object?>(argsDlq) { ["x-queue-type"] = "quorum" };
             if (sacHabilitado)
             {
                 args["x-single-active-consumer"] = true;
@@ -79,7 +90,7 @@ public static class Topologia
         await canal.QueueBindAsync("reservas-expiradas", NomesTopologia.ExchangeDlx, routingKey: string.Empty);
 
         // pagamento.solicitado -> pagamento
-        await canal.QueueDeclareAsync("pagamento", durable: true, exclusive: false, autoDelete: false);
+        await canal.QueueDeclareAsync("pagamento", durable: true, exclusive: false, autoDelete: false, arguments: argsDlq);
         await canal.QueueBindAsync("pagamento", NomesTopologia.ExchangeEventos, "pagamento.solicitado");
 
         // filas de retry com TTL crescente; ao expirar, voltam para pagamento.solicitado
@@ -92,25 +103,35 @@ public static class Topologia
         await canal.QueueBindAsync("pagamento-parking-lot", NomesTopologia.ExchangeEventos, "pagamento.parking-lot");
 
         // antifraude.solicitado -> antifraude (RPC: reply_to + correlation_id)
-        await canal.QueueDeclareAsync("antifraude", durable: true, exclusive: false, autoDelete: false);
+        await canal.QueueDeclareAsync("antifraude", durable: true, exclusive: false, autoDelete: false, arguments: argsDlq);
         await canal.QueueBindAsync("antifraude", NomesTopologia.ExchangeEventos, "antifraude.solicitado");
 
         // pagamento.aprovado -> emissao
-        await canal.QueueDeclareAsync("emissao", durable: true, exclusive: false, autoDelete: false);
+        await canal.QueueDeclareAsync("emissao", durable: true, exclusive: false, autoDelete: false, arguments: argsDlq);
         await canal.QueueBindAsync("emissao", NomesTopologia.ExchangeEventos, "pagamento.aprovado");
 
         // reserva.*, pagamento.*, ingresso.emitido -> notificacao (bindings multiplos)
-        await canal.QueueDeclareAsync("notificacao", durable: true, exclusive: false, autoDelete: false);
+        await canal.QueueDeclareAsync("notificacao", durable: true, exclusive: false, autoDelete: false, arguments: argsDlq);
         await canal.QueueBindAsync("notificacao", NomesTopologia.ExchangeEventos, "reserva.*");
         await canal.QueueBindAsync("notificacao", NomesTopologia.ExchangeEventos, "pagamento.*");
         await canal.QueueBindAsync("notificacao", NomesTopologia.ExchangeEventos, "ingresso.emitido");
         await canal.QueueBindAsync("notificacao", NomesTopologia.ExchangeEventos, "compra.rejeitada.*");
         await canal.QueueBindAsync("notificacao", NomesTopologia.ExchangeEventos, "assento.*");
 
-        // # (tudo) -> auditoria-stream, permite replay do historico
+        // Historico de eventos de negocio -> auditoria-stream, permite replay. Nao inclui
+        // sala-espera.status (heartbeat de posicao, nao e evento de negocio). A retencao e limitada
+        // por idade e tamanho: a stream nao apaga mensagens ao ser consumida.
         await canal.QueueDeclareAsync("auditoria-stream", durable: true, exclusive: false, autoDelete: false,
-            arguments: new Dictionary<string, object?> { ["x-queue-type"] = "stream" });
-        await canal.QueueBindAsync("auditoria-stream", NomesTopologia.ExchangeEventos, "#");
+            arguments: new Dictionary<string, object?>
+            {
+                ["x-queue-type"] = "stream",
+                ["x-max-age"] = "1h",
+                ["x-max-length-bytes"] = 50_000_000L
+            });
+        foreach (var padrao in new[] { "fila.#", "antifraude.#", "compra.#", "reserva.#", "pagamento.#", "ingresso.#", "assento.#" })
+        {
+            await canal.QueueBindAsync("auditoria-stream", NomesTopologia.ExchangeEventos, padrao);
+        }
     }
 
     private static async Task DeclararFilaRetryAsync(IChannel canal, string nomeFila, int ttlMs)

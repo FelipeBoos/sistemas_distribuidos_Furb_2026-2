@@ -16,6 +16,12 @@ public class Worker(ILogger<Worker> logger, IDbContextFactory<IngressosDbContext
 {
     protected override string Fila => NomesTopologia.FilaNotificacao;
 
+    // Um e-mail por vez: com o prefetch padrao (10), envios paralelos estouram o limite de taxa do
+    // Mailtrap e as mensagens excedentes acabam na DLQ.
+    protected override ushort Prefetch => 1;
+
+    private const int TentativasEnvio = 4;
+
     // Caminho atual (Mailtrap, sandbox SMTP em nuvem): exige STARTTLS + autenticacao. O caminho
     // descartado (Mailpit via Docker) nao exige nenhum dos dois - por isso SMTP_USER/PASSWORD
     // sao opcionais e so autenticam quando preenchidos.
@@ -112,13 +118,41 @@ public class Worker(ILogger<Worker> logger, IDbContextFactory<IngressosDbContext
         mensagem.Subject = assunto;
         mensagem.Body = new TextPart("plain") { Text = corpo };
 
+        // Mailtrap (plano gratuito) recusa rajadas ("Too many emails per second"). Tentativas com
+        // espera crescente absorvem o limite; so depois de esgotar as tentativas a mensagem vai
+        // para a DLQ.
+        for (var tentativa = 1; ; tentativa++)
+        {
+            try
+            {
+                await EnviarUmaVezAsync(mensagem, ct);
+                break;
+            }
+            catch (SmtpCommandException ex) when (tentativa < TentativasEnvio)
+            {
+                var espera = TimeSpan.FromSeconds(Math.Pow(2, tentativa));
+                logger.LogWarning("SMTP recusou o e-mail (tentativa {Tentativa}): {Motivo}; nova tentativa em {Espera}",
+                    tentativa, ex.Message, espera);
+                await Task.Delay(espera, ct);
+            }
+        }
+
+        logger.LogInformation("E-mail '{Assunto}' enviado para {Destinatario}", assunto, destinatario);
+    }
+
+    private async Task EnviarUmaVezAsync(MimeMessage mensagem, CancellationToken ct)
+    {
         var autenticado = !string.IsNullOrEmpty(SmtpUser) && !string.IsNullOrEmpty(SmtpPassword);
+
+        // Host remoto nunca recebe conexao em texto puro: sem STARTTLS, a senha e o e-mail trafegam
+        // abertos. So o localhost (Mailpit do caminho descartado) dispensa criptografia.
+        var usaStartTls = autenticado || SmtpHost != "localhost";
 
         using var cliente = new SmtpClient();
         await cliente.ConnectAsync(
             SmtpHost,
             SmtpPort,
-            autenticado ? MailKit.Security.SecureSocketOptions.StartTls : MailKit.Security.SecureSocketOptions.None,
+            usaStartTls ? MailKit.Security.SecureSocketOptions.StartTls : MailKit.Security.SecureSocketOptions.None,
             ct);
 
         if (autenticado)
@@ -128,7 +162,5 @@ public class Worker(ILogger<Worker> logger, IDbContextFactory<IngressosDbContext
 
         await cliente.SendAsync(mensagem, ct);
         await cliente.DisconnectAsync(true, ct);
-
-        logger.LogInformation("E-mail '{Assunto}' enviado para {Destinatario}", assunto, destinatario);
     }
 }

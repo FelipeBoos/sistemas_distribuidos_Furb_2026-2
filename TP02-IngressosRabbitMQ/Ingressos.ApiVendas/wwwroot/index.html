@@ -1,0 +1,214 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Venda de ingressos - demonstração</title>
+  <style>
+    :root { --fundo: #f5f6f8; --cartao: #ffffff; --texto: #1d2330; --suave: #6b7280; --destaque: #2f5bea; --ok: #15803d; --erro: #b91c1c; }
+    @media (prefers-color-scheme: dark) {
+      :root:not([data-theme="light"]) { --fundo: #14171f; --cartao: #1e2330; --texto: #e6e9f2; --suave: #9aa3b5; --destaque: #6d8cff; --ok: #4ade80; --erro: #f87171; }
+    }
+    :root[data-theme="dark"] { --fundo: #14171f; --cartao: #1e2330; --texto: #e6e9f2; --suave: #9aa3b5; --destaque: #6d8cff; --ok: #4ade80; --erro: #f87171; }
+    body { margin: 0; background: var(--fundo); color: var(--texto); font-family: system-ui, sans-serif; }
+    main { max-width: 640px; margin: 0 auto; padding: 24px 16px; }
+    h1 { font-size: 1.4rem; margin: 0 0 4px; }
+    .sub { color: var(--suave); margin: 0 0 20px; font-size: 0.95rem; }
+    .cartao { background: var(--cartao); border-radius: 12px; padding: 20px; box-shadow: 0 1px 3px rgba(0,0,0,.08); margin-bottom: 16px; }
+    label { display: block; font-size: 0.9rem; margin-bottom: 12px; }
+    select, input[type="text"] { width: 100%; padding: 8px; margin-top: 4px; font: inherit; border-radius: 8px; border: 1px solid #c9ced8; background: transparent; color: inherit; box-sizing: border-box; }
+    .linha { display: flex; gap: 12px; align-items: center; }
+    .linha label { flex: 1; }
+    button { background: var(--destaque); color: #fff; border: 0; border-radius: 8px; padding: 10px 18px; font: inherit; font-weight: 600; cursor: pointer; width: 100%; }
+    button:disabled { opacity: .5; cursor: default; }
+    ol.linha-do-tempo { list-style: none; padding: 0; margin: 0; }
+    ol.linha-do-tempo li { padding: 10px 0; border-bottom: 1px solid rgba(127,127,127,.2); }
+    ol.linha-do-tempo li:last-child { border-bottom: 0; }
+    .ok { color: var(--ok); font-weight: 600; }
+    .erro { color: var(--erro); font-weight: 600; }
+    .qr { font-family: ui-monospace, monospace; font-size: 0.85rem; word-break: break-all; color: var(--suave); }
+    .vazio { color: var(--suave); font-size: 0.95rem; }
+  </style>
+</head>
+<body>
+<main>
+  <h1>Venda de ingressos</h1>
+  <p class="sub">Demonstração de mensageria com RabbitMQ: cada etapa abaixo passa por uma fila diferente.</p>
+
+  <section class="cartao">
+    <label>Setor
+      <select id="setor"><option>Carregando...</option></select>
+    </label>
+    <div class="linha">
+      <label>Quantidade
+        <select id="quantidade">
+          <option value="1">1 ingresso</option>
+          <option value="2" selected>2 ingressos</option>
+          <option value="3">3 ingressos</option>
+          <option value="4">4 ingressos</option>
+        </select>
+      </label>
+      <label style="display:flex;align-items:center;gap:6px;margin-top:20px;">
+        <input type="checkbox" id="meia"> Meia-entrada
+      </label>
+    </div>
+    <p class="sub" id="preco" style="margin:0 0 12px;"></p>
+    <button id="comprar">Comprar ingressos</button>
+  </section>
+
+  <section class="cartao">
+    <h2 style="font-size:1.05rem;margin:0 0 12px;">Acompanhamento do pedido</h2>
+    <ol class="linha-do-tempo" id="linhaDoTempo">
+      <li class="vazio">Nenhum pedido em andamento.</li>
+    </ol>
+  </section>
+</main>
+
+<script>
+  const API = "";
+  const $ = (id) => document.getElementById(id);
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+  // Identificador do "cliente" da demonstracao, por aba. Falhas de sessionStorage nao impedem o uso.
+  function usuarioDaSessao() {
+    try {
+      let id = sessionStorage.getItem("usuarioId");
+      if (!id) { id = crypto.randomUUID(); sessionStorage.setItem("usuarioId", id); }
+      return id;
+    } catch { return crypto.randomUUID(); }
+  }
+  const usuarioId = usuarioDaSessao();
+
+  let setores = [];
+
+  async function carregarSetores() {
+    const resposta = await fetch(`${API}/setores`);
+    setores = await resposta.json();
+    $("setor").innerHTML = "";
+    for (const s of setores) {
+      const opcao = document.createElement("option");
+      opcao.value = s.id;
+      opcao.textContent = `${s.nome} (capacidade ${s.capacidade})`;
+      $("setor").appendChild(opcao);
+    }
+    atualizarPreco();
+  }
+
+  function atualizarPreco() {
+    const setor = setores.find((s) => s.id === $("setor").value);
+    if (!setor) return;
+    const quantidade = Number($("quantidade").value);
+    const unitario = $("meia").checked ? setor.preco / 2 : setor.preco;
+    $("preco").textContent = `Total estimado: ${(unitario * quantidade).toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}`;
+  }
+
+  function adicionarEtapa(texto, classe) {
+    const lista = $("linhaDoTempo");
+    if (lista.querySelector(".vazio")) lista.innerHTML = "";
+    const item = document.createElement("li");
+    const marca = document.createElement("span");
+    marca.className = classe || "";
+    marca.textContent = texto;
+    item.appendChild(marca);
+    lista.appendChild(item);
+    return item;
+  }
+
+  async function reservasDoUsuario() {
+    const resposta = await fetch(`${API}/reservas?usuarioId=${usuarioId}`);
+    return resposta.json();
+  }
+
+  // Espera ate a condicao ser satisfeita (consulta a cada 1s), com limite de tempo.
+  async function esperar(condicao, limiteMs) {
+    const fim = Date.now() + limiteMs;
+    while (Date.now() < fim) {
+      const resultado = await condicao();
+      if (resultado) return resultado;
+      await sleep(1000);
+    }
+    return null;
+  }
+
+  $("setor").addEventListener("change", atualizarPreco);
+  $("quantidade").addEventListener("change", atualizarPreco);
+  $("meia").addEventListener("change", atualizarPreco);
+
+  $("comprar").addEventListener("click", async () => {
+    const botao = $("comprar");
+    botao.disabled = true;
+    $("linhaDoTempo").innerHTML = "";
+
+    const quantidade = Number($("quantidade").value);
+    const meia = $("meia").checked;
+    const idsAntes = new Set((await reservasDoUsuario()).map((r) => r.reservaId));
+
+    adicionarEtapa(`Pedido enviado: ${quantidade} ingresso(s) para ${$("setor").selectedOptions[0].textContent}.`);
+    const resposta = await fetch(`${API}/compras`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ usuarioId, setorId: $("setor").value, quantidadeIngressos: quantidade, meiaEntrada: meia })
+    });
+    if (!resposta.ok) {
+      adicionarEtapa(`Pedido recusado pela API (HTTP ${resposta.status}).`, "erro");
+      botao.disabled = false;
+      return;
+    }
+
+    // Etapa 1: o Alocador cria uma reserva por ingresso (ReservaCriada, via outbox).
+    const novas = await esperar(async () => {
+      const reservas = await reservasDoUsuario();
+      const criadas = reservas.filter((r) => !idsAntes.has(r.reservaId));
+      return criadas.length >= quantidade ? criadas : null;
+    }, 20000);
+
+    if (!novas) {
+      adicionarEtapa("Nenhuma reserva foi criada em 20 s. O motivo da rejeição aparece no log do Alocador.", "erro");
+      botao.disabled = false;
+      return;
+    }
+
+    for (const reserva of novas) {
+      adicionarEtapa(`Reserva criada: assento ${reserva.assento} (${reserva.setor}).`, "ok");
+    }
+
+    // Etapa 2: pagamento de cada reserva (valor calculado pelo servidor).
+    for (const reserva of novas) {
+      const chave = crypto.randomUUID();
+      await fetch(`${API}/pagamentos`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ reservaId: reserva.reservaId, idempotencyKey: chave })
+      });
+      adicionarEtapa(`Pagamento solicitado (${reserva.assento}).`);
+    }
+
+    // Etapa 3: pagamento aprovado e ingresso emitido (QR code) para cada reserva.
+    for (const reserva of novas) {
+      const atual = await esperar(async () => {
+        const reservas = await reservasDoUsuario();
+        const r = reservas.find((x) => x.reservaId === reserva.reservaId);
+        return r && r.qrCode ? r : null;
+      }, 20000);
+
+      if (atual) {
+        adicionarEtapa(`Pagamento de ${atual.assento} aprovado (${atual.valor.toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}).`, "ok");
+        const item = adicionarEtapa("Ingresso emitido. QR code: ", "ok");
+        const qr = document.createElement("div");
+        qr.className = "qr";
+        qr.textContent = atual.qrCode;
+        item.appendChild(qr);
+      } else {
+        adicionarEtapa(`Pagamento de ${reserva.assento} ainda não aprovado. Recusas são reenviadas automaticamente (5 s, 30 s, 2 min).`, "erro");
+      }
+    }
+
+    botao.disabled = false;
+  });
+
+  carregarSetores().catch(() => {
+    $("setor").innerHTML = "<option>Não foi possível carregar os setores</option>";
+  });
+</script>
+</body>
+</html>

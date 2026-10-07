@@ -43,10 +43,21 @@ public class Worker(ILogger<Worker> logger) : BackgroundService
 
         await canal.BasicConsumeAsync("sala-espera", autoAck: false, consumer: consumidor, cancellationToken: stoppingToken);
 
+        // Publica so quando o total muda (ou a cada 30 s, para um cliente que se conecte depois ja
+        // receber um valor). Publicar a cada segundo gerava ruido constante na auditoria.
+        var ultimoPublicado = -1;
+        var ultimaPublicacao = DateTime.MinValue;
         while (!stoppingToken.IsCancellationRequested)
         {
-            var status = new SalaEsperaStatus(EventoId: Guid.Empty, PosicaoNaFila: 0, TotalAdmitido: _admitidos.Count);
-            await publisher.PublicarAsync("sala-espera.status", status);
+            var total = _admitidos.Count;
+            if (total != ultimoPublicado || DateTime.UtcNow - ultimaPublicacao > TimeSpan.FromSeconds(30))
+            {
+                var status = new SalaEsperaStatus(EventoId: Guid.Empty, PosicaoNaFila: 0, TotalAdmitido: total);
+                await publisher.PublicarAsync("sala-espera.status", status);
+                ultimoPublicado = total;
+                ultimaPublicacao = DateTime.UtcNow;
+            }
+
             await Task.Delay(TimeSpan.FromSeconds(1), stoppingToken);
         }
     }

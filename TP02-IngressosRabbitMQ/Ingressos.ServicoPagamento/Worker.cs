@@ -3,6 +3,7 @@ using System.Text.Json;
 using Ingressos.Contracts.Comandos;
 using Ingressos.Contracts.Eventos;
 using Ingressos.Domain.Entidades;
+using Ingressos.Domain.Regras;
 using Ingressos.Messaging;
 using Ingressos.Persistence;
 using Microsoft.EntityFrameworkCore;
@@ -41,11 +42,26 @@ public class Worker(ILogger<Worker> logger, IDbContextFactory<IngressosDbContext
 
         if (pagamento is null)
         {
+            // O valor e calculado pelo servidor a partir do preco do setor da reserva: o cliente
+            // nao informa preco. Reserva inexistente nao tem o que cobrar.
+            var tarifa = await (
+                from r in db.Reservas
+                join a in db.Assentos on r.AssentoId equals a.Id
+                join s in db.Setores on a.SetorId equals s.Id
+                where r.Id == comando.ReservaId
+                select new { s.Preco, r.MeiaEntrada }).FirstOrDefaultAsync(ct);
+
+            if (tarifa is null)
+            {
+                logger.LogWarning("Pagamento solicitado para reserva {ReservaId} inexistente; ignorado", comando.ReservaId);
+                return;
+            }
+
             pagamento = new Pagamento
             {
                 Id = Guid.NewGuid(),
                 ReservaId = comando.ReservaId,
-                Valor = comando.Valor,
+                Valor = RegrasCompra.CalcularValor(tarifa.Preco, tarifa.MeiaEntrada),
                 IdempotencyKey = comando.IdempotencyKey,
                 Status = StatusPagamento.Solicitado
             };
